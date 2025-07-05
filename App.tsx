@@ -4,24 +4,9 @@ import DescriptionModal from './DescriptionModal';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
-import * as Notifications from 'expo-notifications';
 import { ref, push, onValue, set } from 'firebase/database';
 import { realtimeDb } from './firebaseRealtime';
 import type { DangerZone } from './types';
-
-function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371000; // radius of Earth in meters
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) *
-      Math.cos(lat2 * Math.PI / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
 
 export default function App() {
   const [location, setLocation] = useState<null | { latitude: number; longitude: number }>(null);
@@ -46,7 +31,7 @@ export default function App() {
   const pan = React.useRef(new Animated.ValueXY()).current;
   const joystickPos = useRef({ x: 0, y: 0 }); // Track current joystick position
   const moveInterval = useRef<NodeJS.Timeout | null>(null); // Timer for continuous movement
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef(null);
   const [joystickAngle, setJoystickAngle] = useState(0);
 
   // Marker refresh workaround (less disruptive)
@@ -245,62 +230,6 @@ export default function App() {
     }
   }, [cameraLocation]);
 
-  // Add ref for tracking entered zones
-  const enteredZoneIds = useRef<Set<string>>(new Set());
-
-  // Configure notifications on mount
-  useEffect(() => {
-    (async () => {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Notification permission not granted');
-      }
-
-      Notifications.setNotificationHandler({
-        handleNotification: async () => ({
-          shouldShowAlert: true,
-          shouldPlaySound: false,
-          shouldSetBadge: false,
-          shouldShowBanner: true,
-          shouldShowList: true,
-        }),
-      });
-    })();
-  }, []);
-
-  // Check for danger zone entry
-  useEffect(() => {
-    if (!location || dangerZones.length === 0) return;
-
-    for (const zone of dangerZones) {
-      const dist = getDistanceMeters(
-        location.latitude,
-        location.longitude,
-        zone.latitude,
-        zone.longitude
-      );
-
-      const r = zone.radius || 40;
-      if (dist <= r) {
-        if (!enteredZoneIds.current.has(zone.id)) {
-          enteredZoneIds.current.add(zone.id);
-
-          Notifications.scheduleNotificationAsync({
-            content: {
-              title: '⚠️ Danger Zone Alert',
-              body: zone.description 
-                ? `You've entered: ${zone.description}`
-                : 'You just entered a danger zone!',
-            },
-            trigger: null, // immediate
-          });
-        }
-      } else {
-        enteredZoneIds.current.delete(zone.id); // Allow retriggering if user leaves and re-enters
-      }
-    }
-  }, [location, dangerZones]);
-
   if (loading) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}> 
@@ -343,13 +272,11 @@ export default function App() {
         zoomEnabled={!joystickActive}
       >
          {/* Custom blue dot marker for user location */}
-         {location && (
-           <Marker coordinate={location} anchor={{x:0.5, y:0.5}}>
-             <View style={styles.gmapsBlueDotOuter}>
-               <View style={styles.gmapsBlueDotInner} />
-             </View>
-           </Marker>
-         )}
+         <Marker coordinate={location} anchor={{x:0.5, y:0.5}}>
+          <View style={styles.gmapsBlueDotOuter}>
+            <View style={styles.gmapsBlueDotInner} />
+          </View>
+         </Marker>
          {/* User's marker for new report (green) */}
          {dangerZone && (
            <Marker
