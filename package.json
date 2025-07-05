@@ -9,12 +9,13 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@react-native-community/slider": "^4.5.7",
     "expo": "~53.0.17",
+    "expo-location": "~18.1.6",
     "expo-status-bar": "~2.2.3",
     "react": "19.0.0",
     "react-native": "0.79.5",
-    "react-native-maps": "1.20.1",
-    "expo-location": "~18.1.6"
+    "react-native-maps": "1.20.1"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",

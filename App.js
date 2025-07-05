@@ -1,1 +1,0 @@
-npm uninstall react-native-maps 
