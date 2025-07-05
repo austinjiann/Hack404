@@ -320,45 +320,6 @@ const lastNotificationTime = React.useRef<number>(0);
     setRadius(sliderToRadius(val));
   };
 
-  // Calculate overlapping zones for heat map effect
-  const getOverlappingZonesCount = (targetZone: DangerZone, allZones: DangerZone[]) => {
-    let count = 0;
-    for (const zone of allZones) {
-      if (zone.id === targetZone.id) continue;
-      const dist = getDistanceMeters(
-        targetZone.latitude,
-        targetZone.longitude,
-        zone.latitude,
-        zone.longitude
-      );
-      const combinedRadius = (zone.radius || 40) + (targetZone.radius || 40);
-      if (dist <= combinedRadius) {
-        count++;
-      }
-    }
-    return count;
-  };
-
-  // Get heat map color based on overlap count
-  const getHeatMapColor = (overlaps: number) => {
-    if (overlaps === 0) {
-      return {
-        stroke: 'rgba(255, 190, 0, 0.8)',    // Yellow
-        fill: 'rgba(255, 190, 0, 0.2)'
-      };
-    } else if (overlaps === 1) {
-      return {
-        stroke: 'rgba(255, 140, 0, 0.8)',    // Orange
-        fill: 'rgba(255, 140, 0, 0.3)'
-      };
-    } else {
-      return {
-        stroke: 'rgba(255, 0, 0, 0.8)',      // Red
-        fill: 'rgba(255, 0, 0, 0.4)'
-      };
-    }
-  };
-
   return (
     <View style={styles.container}>
       <MapView
@@ -392,50 +353,65 @@ const lastNotificationTime = React.useRef<number>(0);
         )}
          {/* User's marker for new report (green) */}
          {dangerZone && (
-           <>
-             <Marker
-               coordinate={dangerZone}
-               pinColor="green"
-               draggable
-               onDragEnd={handleMarkerDrag}
-               hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
-               tracksViewChanges={false}
-             />
-             <Circle
-               center={dangerZone}
-               radius={radius}
-               strokeColor="#2ecc40"
-               fillColor="rgba(46,204,64,0.2)"
-             />
-           </>
+           <Marker
+             coordinate={dangerZone}
+             pinColor="green"
+             draggable
+             onDragEnd={handleMarkerDrag}
+             hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
+             tracksViewChanges={false}
+           />
          )}
-         {/* Show all reported danger zones with heat map effect */}
+         {dangerZone && (
+           <Circle
+             center={dangerZone}
+             radius={radius}
+             strokeColor="#2ecc40"
+             fillColor="rgba(46,204,64,0.2)"
+           />
+         )}
+         {/* Show all reported danger zones from Firestore */}
          {filteredDangerZones.map(z => {
            // Compute age in ms
            const now = Date.now();
            const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
            const ageMs = now - ts;
            const maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours
-           if (ageMs > maxAgeMs) return null;
+           if (ageMs > maxAgeMs) return null; // Hide if older than 12 hours
 
-           const overlaps = getOverlappingZonesCount(z, filteredDangerZones);
-           const colors = getHeatMapColor(overlaps);
-
+           // Compute color: red (0) -> orange (6h) -> yellow (12h)
+           // 0h: #d32f2f (red), 6h: #ffa500 (orange), 12h: #fff200 (yellow)
+           const colorStops = [
+             { t: 0, color: [211, 47, 47] },        // red
+             { t: 0.5, color: [255, 165, 0] },      // orange
+             { t: 1, color: [255, 242, 0] },        // yellow
+           ];
+           const t = Math.min(1, Math.max(0, ageMs / maxAgeMs));
+           let color = [211, 47, 47];
+           for (let i = 1; i < colorStops.length; ++i) {
+             if (t <= colorStops[i].t) {
+               const t0 = colorStops[i - 1].t, t1 = colorStops[i].t;
+               const frac = (t - t0) / (t1 - t0);
+               color = colorStops[i - 1].color.map((c, idx) => Math.round(c + frac * (colorStops[i].color[idx] - c)));
+               break;
+             }
+           }
+           const rgb = `rgb(${color[0]},${color[1]},${color[2]})`;
+           const rgba = `rgba(${color[0]},${color[1]},${color[2]},0.2)`;
            return (
              <React.Fragment key={z.id}>
                <Marker
                  key={`marker-${z.id}-${markerRefresh}`}
                  coordinate={{ latitude: z.latitude, longitude: z.longitude }}
-                 pinColor={colors.stroke}
+                 pinColor={rgb}
                  title={z.description ? z.description : 'Danger Zone'}
                />
                <Circle
                  key={`circle-${z.id}-${markerRefresh}`}
                  center={{ latitude: z.latitude, longitude: z.longitude }}
                  radius={z.radius || 40}
-                 strokeColor={colors.stroke}
-                 fillColor={colors.fill}
-                 strokeWidth={2}
+                 strokeColor={rgb}
+                 fillColor={rgba}
                />
              </React.Fragment>
            );
