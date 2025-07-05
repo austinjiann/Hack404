@@ -4,8 +4,9 @@ import DescriptionModal from './DescriptionModal';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
-import { collection, addDoc, getDocs, query, where, Timestamp, onSnapshot } from 'firebase/firestore';
-import { firestore } from './firebase';
+import { ref, push, onValue, set } from 'firebase/database';
+import { realtimeDb } from './firebaseRealtime';
+import type { DangerZone } from './types';
 
 export default function App() {
   const [location, setLocation] = useState<null | { latitude: number; longitude: number }>(null);
@@ -32,21 +33,27 @@ export default function App() {
     };
   };
 
-  // Real-time Firestore listener for all danger zones
+  // Real-time Realtime Database listener for all danger zones
   useEffect(() => {
-    if (!location) return;
-    const delta = 0.02;
-    const { minLat, maxLat, minLng, maxLng } = getBoundingBox(location, delta);
-    const unsub = onSnapshot(collection(firestore, 'danger_zones'), (snapshot) => {
-      const allZones = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // Filter to those within ~0.02 deg (~2km) of center
-      const filtered = allZones.filter((z: any) =>
-        z.latitude >= minLat && z.latitude <= maxLat &&
-        z.longitude >= minLng && z.longitude <= maxLng
-      );
+    const dbRef = ref(realtimeDb, 'danger_zones');
+    const listener = onValue(dbRef, (snapshot) => {
+      const data = snapshot.val() || {};
+      const allZones: DangerZone[] = Object.keys(data).map(id => ({ id, ...data[id] }));
+      let filtered = allZones;
+      if (location) {
+        const delta = 0.02;
+        const { minLat, maxLat, minLng, maxLng } = getBoundingBox(location, delta);
+        filtered = allZones.filter((z: any) =>
+          z.latitude >= minLat && z.latitude <= maxLat &&
+          z.longitude >= minLng && z.longitude <= maxLng
+        );
+      } else {
+        // If no location, show all (or limit to a wide box)
+        filtered = allZones;
+      }
       setDangerZones(filtered);
     });
-    return () => unsub();
+    return () => listener();
   }, [location]);
 
   useEffect(() => {
@@ -74,12 +81,13 @@ export default function App() {
     if (!dangerZone) return;
     setSubmitting(true);
     try {
-      await addDoc(collection(firestore, 'danger_zones'), {
+      const dbRef = ref(realtimeDb, 'danger_zones');
+      await push(dbRef, {
         latitude: dangerZone.latitude,
         longitude: dangerZone.longitude,
         radius,
         description,
-        timestamp: Timestamp.now(),
+        timestamp: Date.now(),
       });
       Alert.alert('Danger zone reported!' + (description ? `\nDescription: ${description}` : ''));
       // Reset state for new report
@@ -98,6 +106,7 @@ export default function App() {
       setSubmitting(false);
     }
   };
+
 
   const handleDescriptionSubmit = (desc: string) => {
     setDescription(desc);
@@ -145,35 +154,66 @@ export default function App() {
         showsUserLocation={true}
         // No need for onRegionChangeComplete fetch, real-time updates handle this
       >
-        {/* User's marker for new report */}
-        <Marker
-          coordinate={dangerZone}
-          pinColor="red"
-          draggable
-          onDragEnd={handleMarkerDrag}
-        />
-        <Circle
-          center={dangerZone}
-          radius={radius}
-          strokeColor="#d32f2f"
-          fillColor="rgba(211,47,47,0.2)"
-        />
-        {/* Show all reported danger zones from Firestore */}
-        {dangerZones.map(z => (
-          <React.Fragment key={z.id}>
-            <Marker
-              coordinate={{ latitude: z.latitude, longitude: z.longitude }}
-              pinColor="#d32f2f"
-              title={z.description ? z.description : 'Danger Zone'}
-            />
-            <Circle
-              center={{ latitude: z.latitude, longitude: z.longitude }}
-              radius={z.radius || 40}
-              strokeColor="#d32f2f"
-              fillColor="rgba(211,47,47,0.13)"
-            />
-          </React.Fragment>
-        ))}
+         {/* User's marker for new report (green) */}
+         <Marker
+           coordinate={dangerZone}
+           pinColor="green"
+           draggable
+           onDragEnd={handleMarkerDrag}
+           hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
+           tracksViewChanges={false}
+         />
+         <Circle
+           center={dangerZone}
+           radius={radius}
+           strokeColor="#2ecc40"
+           fillColor="rgba(46,204,64,0.2)"
+         />
+         {/* Show all reported danger zones from Firestore */}
+         {dangerZones.map(z => {
+           // Compute age in ms
+           const now = Date.now();
+           // For Realtime DB, z.timestamp is ms since epoch
+           const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
+           const ageMs = now - ts;
+           const maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours
+           if (ageMs > maxAgeMs) return null; // Hide if older than 12 hours
+
+           // Compute color: red (0) -> orange (6h) -> yellow (12h)
+           // 0h: #d32f2f (red), 6h: #ffa500 (orange), 12h: #fff200 (yellow)
+           const colorStops = [
+             { t: 0, color: [211, 47, 47] },        // red
+             { t: 0.5, color: [255, 165, 0] },      // orange
+             { t: 1, color: [255, 242, 0] },        // yellow
+           ];
+           const t = Math.min(1, Math.max(0, ageMs / maxAgeMs));
+           let color = [211, 47, 47];
+           for (let i = 1; i < colorStops.length; ++i) {
+             if (t <= colorStops[i].t) {
+               const t0 = colorStops[i - 1].t, t1 = colorStops[i].t;
+               const frac = (t - t0) / (t1 - t0);
+               color = colorStops[i - 1].color.map((c, idx) => Math.round(c + frac * (colorStops[i].color[idx] - c)));
+               break;
+             }
+           }
+           const rgb = `rgb(${color[0]},${color[1]},${color[2]})`;
+           const rgba = `rgba(${color[0]},${color[1]},${color[2]},0.2)`;
+           return (
+             <React.Fragment key={z.id}>
+               <Marker
+                 coordinate={{ latitude: z.latitude, longitude: z.longitude }}
+                 pinColor={rgb}
+                 title={z.description ? z.description : 'Danger Zone'}
+               />
+               <Circle
+                 center={{ latitude: z.latitude, longitude: z.longitude }}
+                 radius={z.radius || 40}
+                 strokeColor={rgb}
+                 fillColor={rgba}
+               />
+             </React.Fragment>
+           );
+         })}
       </MapView>
       <View style={styles.bottomButtonRow}>
         <Pressable style={styles.descButton} onPress={() => {
