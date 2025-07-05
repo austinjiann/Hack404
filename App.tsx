@@ -24,6 +24,7 @@ export default function App() {
   const [descDraft, setDescDraft] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [dangerZones, setDangerZones] = useState<any[]>([]); // All fetched danger zones
+
   const [joystickActive, setJoystickActive] = useState(false);
   const joystickRadius = 40; // px
   const moveStep = 0.001; // ~100m per tick, noticeable
@@ -32,6 +33,15 @@ export default function App() {
   const moveInterval = useRef<NodeJS.Timeout | null>(null); // Timer for continuous movement
   const mapRef = useRef(null);
   const [joystickAngle, setJoystickAngle] = useState(0);
+
+  // Marker refresh workaround (less disruptive)
+  const [markerRefresh, setMarkerRefresh] = useState(0);
+  useEffect(() => {
+    if (dangerZones.length > 0) {
+      const t = setTimeout(() => setMarkerRefresh(f => f + 1), 500);
+      return () => clearTimeout(t);
+    }
+  }, [dangerZones]);
 
   // Helper for bounding box query
   const getBoundingBox = (center: { latitude: number; longitude: number }, delta: number) => {
@@ -43,28 +53,27 @@ export default function App() {
     };
   };
 
-  // Real-time Realtime Database listener for all danger zones
+  // Real-time Realtime Database listener for all danger zones (subscribe once)
   useEffect(() => {
     const dbRef = ref(realtimeDb, 'danger_zones');
     const listener = onValue(dbRef, (snapshot) => {
       const data = snapshot.val() || {};
       const allZones: DangerZone[] = Object.keys(data).map(id => ({ id, ...data[id] }));
-      let filtered = allZones;
-      if (location) {
-        const delta = 0.02;
-        const { minLat, maxLat, minLng, maxLng } = getBoundingBox(location, delta);
-        filtered = allZones.filter((z: any) =>
-          z.latitude >= minLat && z.latitude <= maxLat &&
-          z.longitude >= minLng && z.longitude <= maxLng
-        );
-      } else {
-        // If no location, show all (or limit to a wide box)
-        filtered = allZones;
-      }
-      setDangerZones(filtered);
+      setDangerZones(allZones);
     });
     return () => listener();
-  }, [location]);
+  }, []);
+
+  // Filter danger zones by location on every render
+  const filteredDangerZones = React.useMemo(() => {
+    if (!location) return dangerZones;
+    const delta = 0.02;
+    const { minLat, maxLat, minLng, maxLng } = getBoundingBox(location, delta);
+    return dangerZones.filter((z: any) =>
+      z.latitude >= minLat && z.latitude <= maxLat &&
+      z.longitude >= minLng && z.longitude <= maxLng
+    );
+  }, [dangerZones, location]);
 
   // Set initial location from GPS only once
   useEffect(() => {
@@ -221,7 +230,7 @@ export default function App() {
     }
   }, [cameraLocation]);
 
-  if (loading || !location || !dangerZone) {
+  if (loading) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}> 
         <ActivityIndicator size="large" color="#d32f2f" />
@@ -246,83 +255,93 @@ export default function App() {
       <MapView
         ref={mapRef}
         style={styles.map}
-        initialRegion={{
+        initialRegion={location ? {
           latitude: location.latitude,
           longitude: location.longitude,
           latitudeDelta: 0.01,
           longitudeDelta: 0.01,
+        } : {
+          latitude: 37.78825, // Default to San Francisco
+          longitude: -122.4324,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
         }}
         scrollEnabled={!joystickActive}
         pitchEnabled={!joystickActive}
         rotateEnabled={!joystickActive}
         zoomEnabled={!joystickActive}
       >
-        {/* Custom blue dot marker for user location */}
-        <Marker coordinate={location} anchor={{x:0.5, y:0.5}}>
+         {/* Custom blue dot marker for user location */}
+         <Marker coordinate={location} anchor={{x:0.5, y:0.5}}>
           <View style={styles.gmapsBlueDotOuter}>
             <View style={styles.gmapsBlueDotInner} />
           </View>
-        </Marker>
-        {/* User's marker for new report (green) */}
-        <Marker
-          coordinate={dangerZone}
-          pinColor="green"
-          draggable
-          onDragEnd={handleMarkerDrag}
-          hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
-          tracksViewChanges={false}
-        />
-        <Circle
-          center={dangerZone}
-          radius={radius}
-          strokeColor="#2ecc40"
-          fillColor="rgba(46,204,64,0.2)"
-        />
-        {/* Show all reported danger zones from Firestore */}
-        {dangerZones.map(z => {
-          // Compute age in ms
-          const now = Date.now();
-          // For Realtime DB, z.timestamp is ms since epoch
-          const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
-          const ageMs = now - ts;
-          const maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours
-          if (ageMs > maxAgeMs) return null; // Hide if older than 12 hours
+         </Marker>
+         {/* User's marker for new report (green) */}
+         {dangerZone && (
+           <Marker
+             coordinate={dangerZone}
+             pinColor="green"
+             draggable
+             onDragEnd={handleMarkerDrag}
+             hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
+             tracksViewChanges={false}
+           />
+         )}
+         {dangerZone && (
+           <Circle
+             center={dangerZone}
+             radius={radius}
+             strokeColor="#2ecc40"
+             fillColor="rgba(46,204,64,0.2)"
+           />
+         )}
+         {/* Show all reported danger zones from Firestore */}
+         {dangerZones.map(z => {
+           // Compute age in ms
+           const now = Date.now();
+           const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
+           const ageMs = now - ts;
+           const maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours
+           if (ageMs > maxAgeMs) return null; // Hide if older than 12 hours
 
-          // Compute color: red (0) -> orange (6h) -> yellow (12h)
-          // 0h: #d32f2f (red), 6h: #ffa500 (orange), 12h: #fff200 (yellow)
-          const colorStops = [
-            { t: 0, color: [211, 47, 47] },        // red
-            { t: 0.5, color: [255, 165, 0] },      // orange
-            { t: 1, color: [255, 242, 0] },        // yellow
-          ];
-          const t = Math.min(1, Math.max(0, ageMs / maxAgeMs));
-          let color = [211, 47, 47];
-          for (let i = 1; i < colorStops.length; ++i) {
-            if (t <= colorStops[i].t) {
-              const t0 = colorStops[i - 1].t, t1 = colorStops[i].t;
-              const frac = (t - t0) / (t1 - t0);
-              color = colorStops[i - 1].color.map((c, idx) => Math.round(c + frac * (colorStops[i].color[idx] - c)));
-              break;
-            }
-          }
-          const rgb = `rgb(${color[0]},${color[1]},${color[2]})`;
-          const rgba = `rgba(${color[0]},${color[1]},${color[2]},0.2)`;
-          return (
-            <React.Fragment key={z.id}>
-              <Marker
-                coordinate={{ latitude: z.latitude, longitude: z.longitude }}
-                pinColor={rgb}
-                title={z.description ? z.description : 'Danger Zone'}
-              />
-              <Circle
-                center={{ latitude: z.latitude, longitude: z.longitude }}
-                radius={z.radius || 40}
-                strokeColor={rgb}
-                fillColor={rgba}
-              />
-            </React.Fragment>
-          );
-        })}
+           // Compute color: red (0) -> orange (6h) -> yellow (12h)
+           // 0h: #d32f2f (red), 6h: #ffa500 (orange), 12h: #fff200 (yellow)
+           const colorStops = [
+             { t: 0, color: [211, 47, 47] },        // red
+             { t: 0.5, color: [255, 165, 0] },      // orange
+             { t: 1, color: [255, 242, 0] },        // yellow
+           ];
+           const t = Math.min(1, Math.max(0, ageMs / maxAgeMs));
+           let color = [211, 47, 47];
+           for (let i = 1; i < colorStops.length; ++i) {
+             if (t <= colorStops[i].t) {
+               const t0 = colorStops[i - 1].t, t1 = colorStops[i].t;
+               const frac = (t - t0) / (t1 - t0);
+               color = colorStops[i - 1].color.map((c, idx) => Math.round(c + frac * (colorStops[i].color[idx] - c)));
+               break;
+             }
+           }
+           const rgb = `rgb(${color[0]},${color[1]},${color[2]})`;
+           const rgba = `rgba(${color[0]},${color[1]},${color[2]},0.2)`;
+           return (
+             <React.Fragment key={z.id}>
+               <Marker
+                 key={`marker-${z.id}-${markerRefresh}`}
+                 coordinate={{ latitude: z.latitude, longitude: z.longitude }}
+                 pinColor={rgb}
+                 title={z.description ? z.description : 'Danger Zone'}
+               />
+               <Circle
+                 key={`circle-${z.id}-${markerRefresh}`}
+                 center={{ latitude: z.latitude, longitude: z.longitude }}
+                 radius={z.radius || 40}
+                 strokeColor={rgb}
+                 fillColor={rgba}
+               />
+             </React.Fragment>
+           );
+         })}
       </MapView>
       <View style={styles.bottomButtonRow}>
         <Pressable style={styles.descButton} onPress={() => {
