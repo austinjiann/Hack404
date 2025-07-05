@@ -22,6 +22,16 @@ export default function App() {
   const [descDraft, setDescDraft] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [dangerZones, setDangerZones] = useState<any[]>([]); // All fetched danger zones
+  // Force map/marker refresh workaround
+  const [forceRefresh, setForceRefresh] = useState(0);
+
+  // Whenever dangerZones changes, trigger a dummy update after 500ms
+  useEffect(() => {
+    if (dangerZones.length > 0) {
+      const t = setTimeout(() => setForceRefresh(f => f + 1), 500);
+      return () => clearTimeout(t);
+    }
+  }, [dangerZones]);
 
   // Helper for bounding box query
   const getBoundingBox = (center: { latitude: number; longitude: number }, delta: number) => {
@@ -143,6 +153,7 @@ export default function App() {
   return (
     <View style={styles.container}>
       <MapView
+        key={forceRefresh}
         style={styles.map}
         initialRegion={location ? {
           latitude: location.latitude,
