@@ -15,9 +15,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [dangerZone, setDangerZone] = useState<{ latitude: number; longitude: number } | null>(null);
   // Slider goes from 0 to 100, mapped exponentially to radius 10m-400m
-  const [sliderValue, setSliderValue] = useState(10);
-  const minRadius = 10;
-  const maxRadius = 400;
+  const [sliderValue, setSliderValue] = useState(40);
+  const minRadius = 40;
+  const maxRadius = 800;
   const [radius, setRadius] = useState(minRadius);
   const [descModalVisible, setDescModalVisible] = useState(false);
   const [description, setDescription] = useState<string>('');
@@ -32,15 +32,15 @@ export default function App() {
   const joystickPos = useRef({ x: 0, y: 0 }); // Track current joystick position
   const moveInterval = useRef<NodeJS.Timeout | null>(null); // Timer for continuous movement
   const mapRef = useRef(null);
+  const [lastRegion, setLastRegion] = useState<any>(null);
   const [joystickAngle, setJoystickAngle] = useState(0);
 
   // Marker refresh workaround (less disruptive)
   const [markerRefresh, setMarkerRefresh] = useState(0);
   useEffect(() => {
-    if (dangerZones.length > 0) {
-      const t = setTimeout(() => setMarkerRefresh(f => f + 1), 500);
-      return () => clearTimeout(t);
-    }
+    // Always trigger a marker refresh when dangerZones changes
+    const t = setTimeout(() => setMarkerRefresh(f => f + 1), 500);
+    return () => clearTimeout(t);
   }, [dangerZones]);
 
   // Helper for bounding box query
@@ -253,9 +253,10 @@ export default function App() {
   return (
     <View style={styles.container}>
       <MapView
+        key={markerRefresh}
         ref={mapRef}
         style={styles.map}
-        initialRegion={location ? {
+        region={lastRegion || (location ? {
           latitude: location.latitude,
           longitude: location.longitude,
           latitudeDelta: 0.01,
@@ -265,7 +266,8 @@ export default function App() {
           longitude: -122.4324,
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
-        }}
+        })}
+        onRegionChangeComplete={setLastRegion}
         scrollEnabled={!joystickActive}
         pitchEnabled={!joystickActive}
         rotateEnabled={!joystickActive}
@@ -297,7 +299,7 @@ export default function App() {
            />
          )}
          {/* Show all reported danger zones from Firestore */}
-         {dangerZones.map(z => {
+         {filteredDangerZones.map(z => {
            // Compute age in ms
            const now = Date.now();
            const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
