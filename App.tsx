@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated, Platform } from 'react-native';
+import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated, Platform, Modal } from 'react-native';
 import DescriptionModal from './DescriptionModal';
 import MapView, { Marker, Circle, Region } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
@@ -10,6 +10,8 @@ import { realtimeDb } from './firebaseRealtime';
 import type { DangerZone } from './types';
 
 export default function App() {
+  const [showMarkerModal, setShowMarkerModal] = useState(false);
+  const [selectedMarkerDescription, setSelectedMarkerDescription] = useState<string>('');
   const [location, setLocation] = useState<null | { latitude: number; longitude: number }>(null);
   const [cameraLocation, setCameraLocation] = useState<null | { latitude: number; longitude: number }>(null);
   const locationRef = useRef(location);
@@ -391,57 +393,76 @@ const lastNotificationTime = React.useRef<number>(0);
              fillColor="rgba(46,204,64,0.2)"
            />
          )}
-         {/* Show all reported danger zones from Firestore */}
          {filteredDangerZones.map(z => {
-           // Compute age in ms
-           const now = Date.now();
-           const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
-           const ageMs = now - ts;
-           const maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours
-           if (ageMs > maxAgeMs) return null; // Hide if older than 12 hours
+            // Compute age in ms
+            const now = Date.now();
+            const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
+            const ageMs = now - ts;
+            const maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours
+            if (ageMs > maxAgeMs) return null; // Hide if older than 12 hours
 
-           // Compute color: red (0) -> orange (6h) -> yellow (12h)
-           // 0h: #d32f2f (red), 6h: #ffa500 (orange), 12h: #fff200 (yellow)
-           const colorStops = [
-             { t: 0, color: [211, 47, 47] },        // red
-             { t: 0.5, color: [255, 165, 0] },      // orange
-             { t: 1, color: [255, 242, 0] },        // yellow
-           ];
-           const t = Math.min(1, Math.max(0, ageMs / maxAgeMs));
-           let color = [211, 47, 47];
-           for (let i = 1; i < colorStops.length; ++i) {
-             if (t <= colorStops[i].t) {
-               const t0 = colorStops[i - 1].t, t1 = colorStops[i].t;
-               const frac = (t - t0) / (t1 - t0);
-               color = colorStops[i - 1].color.map((c, idx) => Math.round(c + frac * (colorStops[i].color[idx] - c)));
-               break;
-             }
-           }
-           const rgb = `rgb(${color[0]},${color[1]},${color[2]})`;
-           const rgba = `rgba(${color[0]},${color[1]},${color[2]},0.2)`;
-           return (
-             <React.Fragment key={z.id}>
-               <Marker
-                 key={`marker-${z.id}-${markerRefresh}`}
-                 coordinate={{ latitude: z.latitude, longitude: z.longitude }}
-                 pinColor={rgb}
-                 title={z.description ? z.description : 'Danger Zone'}
-               />
-               <Circle
-                 key={`circle-${z.id}-${markerRefresh}`}
-                 center={{ latitude: z.latitude, longitude: z.longitude }}
-                 radius={z.radius || 40}
-                 strokeColor={rgb}
-                 fillColor={rgba}
-               />
-             </React.Fragment>
-           );
-         })}
+            // Compute color: red (0) -> orange (6h) -> yellow (12h)
+            // 0h: #d32f2f (red), 6h: #ffa500 (orange), 12h: #fff200 (yellow)
+            const colorStops = [
+              { t: 0, color: [211, 47, 47] },        // red
+              { t: 0.5, color: [255, 165, 0] },      // orange
+              { t: 1, color: [255, 242, 0] },        // yellow
+            ];
+            const t = Math.min(1, Math.max(0, ageMs / maxAgeMs));
+            let color = [211, 47, 47];
+            for (let i = 1; i < colorStops.length; ++i) {
+              if (t <= colorStops[i].t) {
+                const t0 = colorStops[i - 1].t, t1 = colorStops[i].t;
+                const frac = (t - t0) / (t1 - t0);
+                color = colorStops[i - 1].color.map((c, idx) => Math.round(c + frac * (colorStops[i].color[idx] - c)));
+                break;
+              }
+            }
+            const rgb = `rgb(${color[0]},${color[1]},${color[2]})`;
+            const rgba = `rgba(${color[0]},${color[1]},${color[2]},0.2)`;
+            return (
+              <React.Fragment key={z.id}>
+                <Marker
+                  key={`marker-${z.id}-${markerRefresh}`}
+                  coordinate={{ latitude: z.latitude, longitude: z.longitude }}
+                  pinColor={rgb}
+                  onPress={() => {
+                    setSelectedMarkerDescription(z.description || 'No description provided.');
+                    setShowMarkerModal(true);
+                  }}
+                />
+                <Circle
+                  key={`circle-${z.id}-${markerRefresh}`}
+                  center={{ latitude: z.latitude, longitude: z.longitude }}
+                  radius={z.radius || 40}
+                  strokeColor={rgb}
+                  fillColor={rgba}
+                />
+              </React.Fragment>
+            );
+          })}
       </MapView>
 
-      {/* Slider Card */}
+      {/* Danger Zone Description Modal */}
+      <Modal
+        visible={showMarkerModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMarkerModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, maxWidth: 320, alignItems: 'center' }}>
+            <Text style={{ fontWeight: 'bold', fontSize: 18, marginBottom: 12 }}>Danger Zone Description</Text>
+            <Text style={{ fontSize: 16, color: '#444', marginBottom: 20, textAlign: 'center' }}>{selectedMarkerDescription}</Text>
+            <Pressable onPress={() => setShowMarkerModal(false)} style={{ paddingVertical: 8, paddingHorizontal: 20, backgroundColor: '#2196F3', borderRadius: 8 }}>
+              <Text style={{ color: 'white', fontWeight: 'bold' }}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rest of the UI: radius slider, action bar, joystick, description modal */}
       <View style={styles.sliderCard}>
-        <Text style={styles.sliderLabel}>Danger Zone Radius</Text>
         <Text style={styles.radiusValue}>{radius}m</Text>
         <Slider
           style={styles.slider}
