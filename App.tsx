@@ -36,6 +36,9 @@ export default function App() {
   const [lastRegion, setLastRegion] = useState<any>(null);
   const [joystickAngle, setJoystickAngle] = useState(0);
 
+  // Store the initial GPS location for reset
+  const initialLocationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+
 // --- Notification/intersection helpers ---
 function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371000;
@@ -157,6 +160,10 @@ const lastNotificationTime = React.useRef<number>(0);
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
       });
+      initialLocationRef.current = {
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+      };
       setCameraLocation({
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
@@ -298,6 +305,14 @@ const lastNotificationTime = React.useRef<number>(0);
     }
   }, [cameraLocation]);
 
+  // Handler for reset position
+  const handleResetPosition = () => {
+    if (initialLocationRef.current) {
+      setLocation({ ...initialLocationRef.current });
+      setCameraLocation({ ...initialLocationRef.current });
+    }
+  };
+
   if (loading) {
     return (
       <View style={[styles.container, styles.loadingContainer]}> 
@@ -322,6 +337,12 @@ const lastNotificationTime = React.useRef<number>(0);
 
   return (
     <View style={styles.container}>
+      {/* Reset Position Button */}
+      <View style={styles.resetButtonContainer}>
+        <Pressable style={styles.resetButton} onPress={handleResetPosition}>
+          <Text style={styles.resetButtonText}>Reset Position</Text>
+        </Pressable>
+      </View>
       <MapView
         key={markerRefresh}
         ref={mapRef}
@@ -693,5 +714,30 @@ const styles = StyleSheet.create({
     backgroundColor: '#2196F3',
     borderWidth: 2,
     borderColor: 'white',
+  },
+  resetButtonContainer: {
+    position: 'absolute',
+    top: 70,
+    left: 20,
+    zIndex: 100,
+  },
+  resetButton: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    shadowColor: '#1976d2',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+    borderWidth: 1.2,
+    borderColor: '#1976d2',
+    alignItems: 'center',
+  },
+  resetButtonText: {
+    color: '#1976d2',
+    fontWeight: 'bold',
+    fontSize: 13,
   },
 });
