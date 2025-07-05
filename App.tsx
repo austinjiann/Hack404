@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated } from 'react-native';
+import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated, Platform } from 'react-native';
 import DescriptionModal from './DescriptionModal';
-import MapView, { Marker, Circle } from 'react-native-maps';
+import MapView, { Marker, Circle, Region } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
 import { ref, push, onValue, set } from 'firebase/database';
@@ -32,7 +32,7 @@ export default function App() {
   const pan = React.useRef(new Animated.ValueXY()).current;
   const joystickPos = useRef({ x: 0, y: 0 }); // Track current joystick position
   const moveInterval = useRef<NodeJS.Timeout | null>(null); // Timer for continuous movement
-  const mapRef = useRef(null);
+  const mapRef = useRef<MapView>(null);
   const [lastRegion, setLastRegion] = useState<any>(null);
   const [joystickAngle, setJoystickAngle] = useState(0);
 
@@ -300,9 +300,11 @@ const lastNotificationTime = React.useRef<number>(0);
 
   if (loading) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}> 
-        <ActivityIndicator size="large" color="#d32f2f" />
-        <Text>Loading map...</Text>
+      <View style={[styles.container, styles.loadingContainer]}> 
+        <View style={styles.loadingCard}>
+          <ActivityIndicator size="large" color="#2196F3" />
+          <Text style={styles.loadingText}>Loading map...</Text>
+        </View>
       </View>
     );
   }
@@ -415,37 +417,55 @@ const lastNotificationTime = React.useRef<number>(0);
            );
          })}
       </MapView>
-      <View style={styles.bottomButtonRow}>
-        <Pressable style={styles.descButton} onPress={() => {
-          setDescDraft(description);
-          setDescModalVisible(true);
-        }}>
-          <Text style={styles.descButtonText}>📝 Describe it</Text>
-        </Pressable>
-        <Pressable style={styles.reportButton} onPress={handleReport}>
-          <Text style={styles.reportButtonText}>🚩 Report it</Text>
-        </Pressable>
-      </View>
-      <DescriptionModal
-        visible={descModalVisible}
-        onClose={() => setDescModalVisible(false)}
-        onSubmit={(desc) => { setDescription(desc); setDescModalVisible(false); }}
-        initialValue={descDraft}
-      />
-      <View style={styles.sliderContainer}>
-        <Text style={styles.sliderLabel}>Radius: {radius}m</Text>
+
+      {/* Slider Card */}
+      <View style={styles.sliderCard}>
+        <Text style={styles.sliderLabel}>Danger Zone Radius</Text>
+        <Text style={styles.radiusValue}>{radius}m</Text>
         <Slider
-          style={{width: 200, height: 40}}
+          style={styles.slider}
           minimumValue={0}
           maximumValue={100}
           step={1}
           value={sliderValue}
-          minimumTrackTintColor="#d32f2f"
-          maximumTrackTintColor="#000000"
+          minimumTrackTintColor="#2196F3"
+          maximumTrackTintColor="rgba(0,0,0,0.1)"
+          thumbTintColor="#2196F3"
           onValueChange={handleSliderChange}
         />
       </View>
-      {/* Joystick overlay */}
+
+      {/* Bottom Action Bar */}
+      <View style={styles.bottomActionBar}>
+        <Pressable 
+          style={({pressed}) => [
+            styles.actionButton,
+            styles.descButton,
+            pressed && styles.buttonPressed
+          ]} 
+          onPress={() => {
+            setDescDraft(description);
+            setDescModalVisible(true);
+          }}
+        >
+          <Text style={styles.actionButtonIcon}>📝</Text>
+          <Text style={[styles.actionButtonText, styles.descButtonText]}>Describe it</Text>
+        </Pressable>
+
+        <Pressable 
+          style={({pressed}) => [
+            styles.actionButton,
+            styles.reportButton,
+            pressed && styles.buttonPressed
+          ]} 
+          onPress={handleReport}
+        >
+          <Text style={styles.actionButtonIcon}>⚠️</Text>
+          <Text style={[styles.actionButtonText, styles.reportButtonText]}>Report Zone</Text>
+        </Pressable>
+      </View>
+
+      {/* Joystick */}
       <View style={styles.joystickContainer} pointerEvents="box-none">
         <View style={styles.joystickBase}>
           <Animated.View
@@ -462,143 +482,216 @@ const lastNotificationTime = React.useRef<number>(0);
           />
         </View>
       </View>
+
+      <DescriptionModal
+        visible={descModalVisible}
+        onClose={() => setDescModalVisible(false)}
+        onSubmit={(desc) => { setDescription(desc); setDescModalVisible(false); }}
+        initialValue={descDraft}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  bottomButtonRow: {
+  container: {
+    flex: 1,
+    backgroundColor: '#F5F5F5',
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingCard: {
+    backgroundColor: 'white',
+    padding: 24,
+    borderRadius: 16,
+    alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '500',
+  },
+  map: {
+    width: Dimensions.get('window').width,
+    height: Dimensions.get('window').height,
+  },
+  sliderCard: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    width: 240,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+  },
+  sliderLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 4,
+  },
+  radiusValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2196F3',
+    marginBottom: 8,
+  },
+  slider: {
+    width: '100%',
+    height: 40,
+  },
+  bottomActionBar: {
     position: 'absolute',
     bottom: 40,
     left: 20,
     right: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
-    zIndex: 10,
+    justifyContent: 'center',
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+  },
+  buttonPressed: {
+    opacity: 0.8,
+    transform: [{ scale: 0.98 }],
+  },
+  actionButtonIcon: {
+    fontSize: 20,
+    marginRight: 8,
+  },
+  actionButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   descButton: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
-    borderWidth: 1,
-    borderColor: '#1976d2',
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginRight: 10,
+    borderWidth: 2,
+    borderColor: '#2196F3',
   },
   descButtonText: {
-    color: '#1976d2',
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginRight: 2,
-  },
-  sliderContainer: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    width: 220,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
-    alignItems: 'center',
-  },
-  sliderLabel: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#d32f2f',
-    marginBottom: 8,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  map: {
-    width: Dimensions.get('window').width,
-    height: Dimensions.get('window').height,
+    color: '#2196F3',
   },
   reportButton: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
-    borderWidth: 1,
-    borderColor: '#d32f2f',
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginLeft: 10,
+    backgroundColor: '#2196F3',
   },
   reportButtonText: {
-    color: '#d32f2f',
-    fontWeight: 'bold',
-    fontSize: 16,
+    color: 'white',
   },
   joystickContainer: {
     position: 'absolute',
     bottom: 120,
     left: 40,
-    width: 80,
-    height: 80,
+    width: 100,
+    height: 100,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 20,
   },
   joystickBase: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(136,136,136,0.15)',
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255,255,255,0.9)',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(0,0,0,0.1)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
   },
   joystickKnob: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#888',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#2196F3',
     position: 'absolute',
-    left: 20,
-    top: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
   },
   gmapsBlueDotOuter: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: 'white',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.08)',
-    shadowColor: '#1976d2',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.4,
-    shadowRadius: 4,
-    elevation: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#2196F3',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.35,
+        shadowRadius: 6,
+      },
+      android: {
+        elevation: 6,
+      },
+    }),
   },
   gmapsBlueDotInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#1976d2',
-    borderWidth: 1.5,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#2196F3',
+    borderWidth: 2,
     borderColor: 'white',
   },
 });
