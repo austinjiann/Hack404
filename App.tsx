@@ -22,13 +22,11 @@ export default function App() {
   const [descDraft, setDescDraft] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [dangerZones, setDangerZones] = useState<any[]>([]); // All fetched danger zones
-  // Force map/marker refresh workaround
-  const [forceRefresh, setForceRefresh] = useState(0);
-
-  // Whenever dangerZones changes, trigger a dummy update after 500ms
+  // Marker refresh workaround (less disruptive)
+  const [markerRefresh, setMarkerRefresh] = useState(0);
   useEffect(() => {
     if (dangerZones.length > 0) {
-      const t = setTimeout(() => setForceRefresh(f => f + 1), 500);
+      const t = setTimeout(() => setMarkerRefresh(f => f + 1), 500);
       return () => clearTimeout(t);
     }
   }, [dangerZones]);
@@ -153,7 +151,6 @@ export default function App() {
   return (
     <View style={styles.container}>
       <MapView
-        key={forceRefresh}
         style={styles.map}
         initialRegion={location ? {
           latitude: location.latitude,
@@ -192,7 +189,6 @@ export default function App() {
          {dangerZones.map(z => {
            // Compute age in ms
            const now = Date.now();
-           // For Realtime DB, z.timestamp is ms since epoch
            const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
            const ageMs = now - ts;
            const maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours
@@ -220,11 +216,13 @@ export default function App() {
            return (
              <React.Fragment key={z.id}>
                <Marker
+                 key={`marker-${z.id}-${markerRefresh}`}
                  coordinate={{ latitude: z.latitude, longitude: z.longitude }}
                  pinColor={rgb}
                  title={z.description ? z.description : 'Danger Zone'}
                />
                <Circle
+                 key={`circle-${z.id}-${markerRefresh}`}
                  center={{ latitude: z.latitude, longitude: z.longitude }}
                  radius={z.radius || 40}
                  strokeColor={rgb}
