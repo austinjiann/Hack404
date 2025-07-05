@@ -5,6 +5,7 @@ import MapView, { Marker, Circle } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
 import { ref, push, onValue, set } from 'firebase/database';
+import * as Notifications from 'expo-notifications';
 import { realtimeDb } from './firebaseRealtime';
 import type { DangerZone } from './types';
 
@@ -15,8 +16,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [dangerZone, setDangerZone] = useState<{ latitude: number; longitude: number } | null>(null);
   // Slider goes from 0 to 100, mapped exponentially to radius 10m-400m
-  const [sliderValue, setSliderValue] = useState(40);
-  const minRadius = 40;
+  const [sliderValue, setSliderValue] = useState(10);
+  const minRadius = 10;
   const maxRadius = 800;
   const [radius, setRadius] = useState(minRadius);
   const [descModalVisible, setDescModalVisible] = useState(false);
@@ -34,6 +35,23 @@ export default function App() {
   const mapRef = useRef(null);
   const [lastRegion, setLastRegion] = useState<any>(null);
   const [joystickAngle, setJoystickAngle] = useState(0);
+
+// --- Notification/intersection helpers ---
+function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) *
+      Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+const enteredZoneIds = React.useRef<Set<string>>(new Set());
+// Track last notification time globally
+const lastNotificationTime = React.useRef<number>(0);
 
   // Marker refresh workaround (less disruptive)
   const [markerRefresh, setMarkerRefresh] = useState(0);
@@ -76,6 +94,56 @@ export default function App() {
   }, [dangerZones, location]);
 
   // Set initial location from GPS only once
+  useEffect(() => {
+    (async () => {
+      const { status } = await Notifications.requestPermissionsAsync();
+      // If notification permissions are not granted, do nothing (no Alert, rely on shouldShowBanner)
+      if (status !== 'granted') {
+        // Optionally, you can log or handle this silently
+      }
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        }),
+      });
+    })();
+  }, []);
+
+  // --- Danger zone intersection notification ---
+  useEffect(() => {
+    if (!location || dangerZones.length === 0) return;
+    const now = Date.now();
+    for (const zone of dangerZones) {
+      const dist = getDistanceMeters(
+        location.latitude,
+        location.longitude,
+        zone.latitude,
+        zone.longitude
+      );
+      const r = zone.radius || 20;
+      if (dist <= r) {
+        if (!enteredZoneIds.current.has(zone.id) && now - lastNotificationTime.current >= 10000) {
+          enteredZoneIds.current.add(zone.id);
+          lastNotificationTime.current = now;
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: '⚠️ Danger Zone Alert',
+              body: 'You just entered a danger zone!',
+              sound: true,
+            },
+            trigger: null,
+          });
+        }
+      } else {
+        enteredZoneIds.current.delete(zone.id);
+      }
+    }
+  }, [location, dangerZones]);
+
+// Set initial location from GPS only once
   useEffect(() => {
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -274,11 +342,13 @@ export default function App() {
         zoomEnabled={!joystickActive}
       >
          {/* Custom blue dot marker for user location */}
-         <Marker coordinate={location} anchor={{x:0.5, y:0.5}}>
-          <View style={styles.gmapsBlueDotOuter}>
-            <View style={styles.gmapsBlueDotInner} />
-          </View>
-         </Marker>
+         {location && (
+          <Marker coordinate={location} anchor={{x:0.5, y:0.5}}>
+            <View style={styles.gmapsBlueDotOuter}>
+              <View style={styles.gmapsBlueDotInner} />
+            </View>
+          </Marker>
+        )}
          {/* User's marker for new report (green) */}
          {dangerZone && (
            <Marker
