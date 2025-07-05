@@ -33,28 +33,27 @@ export default function App() {
     };
   };
 
-  // Real-time Realtime Database listener for all danger zones
+  // Real-time Realtime Database listener for all danger zones (subscribe once)
   useEffect(() => {
     const dbRef = ref(realtimeDb, 'danger_zones');
     const listener = onValue(dbRef, (snapshot) => {
       const data = snapshot.val() || {};
       const allZones: DangerZone[] = Object.keys(data).map(id => ({ id, ...data[id] }));
-      let filtered = allZones;
-      if (location) {
-        const delta = 0.02;
-        const { minLat, maxLat, minLng, maxLng } = getBoundingBox(location, delta);
-        filtered = allZones.filter((z: any) =>
-          z.latitude >= minLat && z.latitude <= maxLat &&
-          z.longitude >= minLng && z.longitude <= maxLng
-        );
-      } else {
-        // If no location, show all (or limit to a wide box)
-        filtered = allZones;
-      }
-      setDangerZones(filtered);
+      setDangerZones(allZones);
     });
     return () => listener();
-  }, [location]);
+  }, []);
+
+  // Filter danger zones by location on every render
+  const filteredDangerZones = React.useMemo(() => {
+    if (!location) return dangerZones;
+    const delta = 0.02;
+    const { minLat, maxLat, minLng, maxLng } = getBoundingBox(location, delta);
+    return dangerZones.filter((z: any) =>
+      z.latitude >= minLat && z.latitude <= maxLat &&
+      z.longitude >= minLng && z.longitude <= maxLng
+    );
+  }, [dangerZones, location]);
 
   useEffect(() => {
     (async () => {
