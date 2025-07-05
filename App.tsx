@@ -420,10 +420,10 @@ const lastNotificationTime = React.useRef<number>(0);
           setDescDraft(description);
           setDescModalVisible(true);
         }}>
-          <Text style={styles.descButtonText}>📝 Add Description</Text>
+          <Text style={styles.descButtonText}>📝 Describe it</Text>
         </Pressable>
         <Pressable style={styles.reportButton} onPress={handleReport}>
-          <Text style={styles.reportButtonText}>🚩 Report</Text>
+          <Text style={styles.reportButtonText}>🚩 Report it</Text>
         </Pressable>
       </View>
       <DescriptionModal
