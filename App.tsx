@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator } from 'react-native';
+import DescriptionModal from './DescriptionModal';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
+import { collection, addDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
+import { firestore } from './firebase';
 
 export default function App() {
   const [location, setLocation] = useState<null | { latitude: number; longitude: number }>(null);
@@ -13,6 +16,40 @@ export default function App() {
   const minRadius = 10;
   const maxRadius = 400;
   const [radius, setRadius] = useState(minRadius);
+  const [descModalVisible, setDescModalVisible] = useState(false);
+  const [description, setDescription] = useState<string>('');
+  const [descDraft, setDescDraft] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
+  const [dangerZones, setDangerZones] = useState<any[]>([]); // All fetched danger zones
+
+  // Helper for bounding box query
+  const getBoundingBox = (center: { latitude: number; longitude: number }, delta: number) => {
+    return {
+      minLat: center.latitude - delta,
+      maxLat: center.latitude + delta,
+      minLng: center.longitude - delta,
+      maxLng: center.longitude + delta,
+    };
+  };
+
+  // Fetch danger zones in view (simple bounding box)
+  const fetchDangerZones = async (center: { latitude: number; longitude: number }) => {
+    // For simplicity, fetch all and filter client-side (Firestore doesn't support geo-queries natively)
+    try {
+      const snapshot = await getDocs(collection(firestore, 'danger_zones'));
+      const allZones = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Filter to those within ~0.02 deg (~2km) of center
+      const delta = 0.02;
+      const { minLat, maxLat, minLng, maxLng } = getBoundingBox(center, delta);
+      const filtered = allZones.filter((z: any) =>
+        z.latitude >= minLat && z.latitude <= maxLat &&
+        z.longitude >= minLng && z.longitude <= maxLng
+      );
+      setDangerZones(filtered);
+    } catch (err) {
+      console.error('Error fetching danger zones:', err);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -35,8 +72,44 @@ export default function App() {
     })();
   }, []);
 
-  const handleReport = () => {
-    Alert.alert('Danger zone reported!');
+  // Fetch danger zones when map loads or location changes
+  useEffect(() => {
+    if (location) fetchDangerZones(location);
+  }, [location]);
+
+  const handleReport = async () => {
+    if (!dangerZone) return;
+    setSubmitting(true);
+    try {
+      await addDoc(collection(firestore, 'danger_zones'), {
+        latitude: dangerZone.latitude,
+        longitude: dangerZone.longitude,
+        radius,
+        description,
+        timestamp: Timestamp.now(),
+      });
+      Alert.alert('Danger zone reported!' + (description ? `\nDescription: ${description}` : ''));
+      // Reset state for new report
+      setDescription('');
+      setDescDraft('');
+      // Move marker to a new position (e.g., offset slightly)
+      setDangerZone({
+        latitude: location!.latitude + (Math.random() - 0.5) * 0.002,
+        longitude: location!.longitude + (Math.random() - 0.5) * 0.002,
+      });
+      setSliderValue(10);
+      setRadius(minRadius);
+      // Refresh danger zones
+      fetchDangerZones(location!);
+    } catch (err) {
+      Alert.alert('Error reporting danger zone', String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDescriptionSubmit = (desc: string) => {
+    setDescription(desc);
   };
 
   // Exponential mapping for slider: small values change radius less, large values change radius more
@@ -79,7 +152,12 @@ export default function App() {
           longitudeDelta: 0.01,
         }}
         showsUserLocation={true}
+        onRegionChangeComplete={(reg) => {
+          // Optionally fetch new zones for new region center
+          fetchDangerZones({ latitude: reg.latitude, longitude: reg.longitude });
+        }}
       >
+        {/* User's marker for new report */}
         <Marker
           coordinate={dangerZone}
           pinColor="red"
@@ -92,10 +170,40 @@ export default function App() {
           strokeColor="#d32f2f"
           fillColor="rgba(211,47,47,0.2)"
         />
+        {/* Show all reported danger zones from Firestore */}
+        {dangerZones.map(z => (
+          <React.Fragment key={z.id}>
+            <Marker
+              coordinate={{ latitude: z.latitude, longitude: z.longitude }}
+              pinColor="#d32f2f"
+              title={z.description ? z.description : 'Danger Zone'}
+            />
+            <Circle
+              center={{ latitude: z.latitude, longitude: z.longitude }}
+              radius={z.radius || 40}
+              strokeColor="#d32f2f"
+              fillColor="rgba(211,47,47,0.13)"
+            />
+          </React.Fragment>
+        ))}
       </MapView>
-      <Pressable style={styles.reportButton} onPress={handleReport}>
-        <Text style={styles.reportButtonText}>🚩 Report</Text>
-      </Pressable>
+      <View style={styles.bottomButtonRow}>
+        <Pressable style={styles.descButton} onPress={() => {
+          setDescDraft(description);
+          setDescModalVisible(true);
+        }}>
+          <Text style={styles.descButtonText}>📝 Add Description</Text>
+        </Pressable>
+        <Pressable style={styles.reportButton} onPress={handleReport}>
+          <Text style={styles.reportButtonText}>🚩 Report</Text>
+        </Pressable>
+      </View>
+      <DescriptionModal
+        visible={descModalVisible}
+        onClose={() => setDescModalVisible(false)}
+        onSubmit={(desc) => { setDescription(desc); setDescModalVisible(false); }}
+        initialValue={descDraft}
+      />
       <View style={styles.sliderContainer}>
         <Text style={styles.sliderLabel}>Radius: {radius}m</Text>
         <Slider
@@ -114,6 +222,39 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  bottomButtonRow: {
+    position: 'absolute',
+    bottom: 40,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  descButton: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#1976d2',
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
+  },
+  descButtonText: {
+    color: '#1976d2',
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginRight: 2,
+  },
   sliderContainer: {
     position: 'absolute',
     top: 60,
@@ -144,9 +285,6 @@ const styles = StyleSheet.create({
     height: Dimensions.get('window').height,
   },
   reportButton: {
-    position: 'absolute',
-    bottom: 40,
-    right: 20,
     backgroundColor: '#fff',
     borderRadius: 20,
     paddingVertical: 12,
@@ -160,6 +298,8 @@ const styles = StyleSheet.create({
     borderColor: '#d32f2f',
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+    marginLeft: 10,
   },
   reportButtonText: {
     color: '#d32f2f',
