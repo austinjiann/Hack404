@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated } from 'react-native';
 import DescriptionModal from './DescriptionModal';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
@@ -10,6 +10,8 @@ import type { DangerZone } from './types';
 
 export default function App() {
   const [location, setLocation] = useState<null | { latitude: number; longitude: number }>(null);
+  const [cameraLocation, setCameraLocation] = useState<null | { latitude: number; longitude: number }>(null);
+  const locationRef = useRef(location);
   const [loading, setLoading] = useState(true);
   const [dangerZone, setDangerZone] = useState<{ latitude: number; longitude: number } | null>(null);
   // Slider goes from 0 to 100, mapped exponentially to radius 10m-400m
@@ -22,6 +24,16 @@ export default function App() {
   const [descDraft, setDescDraft] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [dangerZones, setDangerZones] = useState<any[]>([]); // All fetched danger zones
+
+  const [joystickActive, setJoystickActive] = useState(false);
+  const joystickRadius = 40; // px
+  const moveStep = 0.001; // ~100m per tick, noticeable
+  const pan = React.useRef(new Animated.ValueXY()).current;
+  const joystickPos = useRef({ x: 0, y: 0 }); // Track current joystick position
+  const moveInterval = useRef<NodeJS.Timeout | null>(null); // Timer for continuous movement
+  const mapRef = useRef(null);
+  const [joystickAngle, setJoystickAngle] = useState(0);
+
   // Marker refresh workaround (less disruptive)
   const [markerRefresh, setMarkerRefresh] = useState(0);
   useEffect(() => {
@@ -63,6 +75,7 @@ export default function App() {
     );
   }, [dangerZones, location]);
 
+  // Set initial location from GPS only once
   useEffect(() => {
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -76,6 +89,10 @@ export default function App() {
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
       });
+      setCameraLocation({
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+      });
       setDangerZone({
         latitude: loc.coords.latitude + 0.001,
         longitude: loc.coords.longitude,
@@ -83,6 +100,20 @@ export default function App() {
       setLoading(false);
     })();
   }, []);
+
+  // Keep locationRef in sync with location
+  useEffect(() => {
+    locationRef.current = location;
+  }, [location]);
+
+  // Delayed camera follow effect
+  useEffect(() => {
+    if (!location) return;
+    const timeout = setTimeout(() => {
+      setCameraLocation(location);
+    }, 1000); // 1 second delay
+    return () => clearTimeout(timeout);
+  }, [location]);
 
   const handleReport = async () => {
     if (!dangerZone) return;
@@ -128,6 +159,77 @@ export default function App() {
     return Math.round(100 * Math.log(r / minRadius) / Math.log(maxRadius / minRadius));
   };
 
+  // Joystick pan responder
+  const panResponder = React.useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        setJoystickActive(true);
+        pan.setValue({ x: 0, y: 0 });
+        joystickPos.current = { x: 0, y: 0 };
+        // Start movement interval
+        if (moveInterval.current) clearInterval(moveInterval.current);
+        moveInterval.current = setInterval(() => {
+          const { x, y } = joystickPos.current;
+          const distance = Math.sqrt(x * x + y * y);
+          if (locationRef.current && distance > 0) { // Lowered threshold
+            const angle = Math.atan2(y, x);
+            setJoystickAngle(angle);
+            const speed = 0.000025; // Constant, slow walk-like speed
+            const dLat = -Math.sin(angle) * speed;
+            const dLng = Math.cos(angle) * speed;
+            setLocation(loc => {
+              const newLoc = loc ? {
+                latitude: loc.latitude + dLat,
+                longitude: loc.longitude + dLng,
+              } : loc;
+              return newLoc;
+            });
+          }
+        }, 16); // ~60fps
+      },
+      onPanResponderMove: (e, gesture) => {
+        // Clamp the knob to the joystick base radius
+        const dx = gesture.dx;
+        const dy = gesture.dy;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        let clampedX = dx;
+        let clampedY = dy;
+        if (distance > joystickRadius) {
+          const angle = Math.atan2(dy, dx);
+          clampedX = Math.cos(angle) * joystickRadius;
+          clampedY = Math.sin(angle) * joystickRadius;
+        }
+        pan.setValue({ x: clampedX, y: clampedY });
+        joystickPos.current = { x: clampedX, y: clampedY }; // Update current joystick position
+        if (clampedX !== 0 || clampedY !== 0) {
+          setJoystickAngle(Math.atan2(clampedY, clampedX));
+        }
+      },
+      onPanResponderRelease: () => {
+        setJoystickActive(false);
+        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+        joystickPos.current = { x: 0, y: 0 };
+        if (moveInterval.current) {
+          clearInterval(moveInterval.current);
+          moveInterval.current = null;
+        }
+      },
+    })
+  ).current;
+
+  // Center the map on the blue dot as it moves
+  useEffect(() => {
+    if (mapRef.current && cameraLocation) {
+      mapRef.current.animateToRegion({
+        latitude: cameraLocation.latitude,
+        longitude: cameraLocation.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 1000);
+    }
+  }, [cameraLocation]);
+
   if (loading) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}> 
@@ -151,6 +253,7 @@ export default function App() {
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={styles.map}
         initialRegion={location ? {
           latitude: location.latitude,
@@ -163,9 +266,17 @@ export default function App() {
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
         }}
-        showsUserLocation={true}
-        // No need for onRegionChangeComplete fetch, real-time updates handle this
+        scrollEnabled={!joystickActive}
+        pitchEnabled={!joystickActive}
+        rotateEnabled={!joystickActive}
+        zoomEnabled={!joystickActive}
       >
+         {/* Custom blue dot marker for user location */}
+         <Marker coordinate={location} anchor={{x:0.5, y:0.5}}>
+          <View style={styles.gmapsBlueDotOuter}>
+            <View style={styles.gmapsBlueDotInner} />
+          </View>
+         </Marker>
          {/* User's marker for new report (green) */}
          {dangerZone && (
            <Marker
@@ -262,6 +373,23 @@ export default function App() {
           onValueChange={handleSliderChange}
         />
       </View>
+      {/* Joystick overlay */}
+      <View style={styles.joystickContainer} pointerEvents="box-none">
+        <View style={styles.joystickBase}>
+          <Animated.View
+            style={[
+              styles.joystickKnob,
+              {
+                transform: [
+                  { translateX: pan.x },
+                  { translateY: pan.y },
+                ],
+              },
+            ]}
+            {...panResponder.panHandlers}
+          />
+        </View>
+      </View>
     </View>
   );
 }
@@ -350,5 +478,55 @@ const styles = StyleSheet.create({
     color: '#d32f2f',
     fontWeight: 'bold',
     fontSize: 16,
+  },
+  joystickContainer: {
+    position: 'absolute',
+    bottom: 120,
+    left: 40,
+    width: 80,
+    height: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  joystickBase: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(136,136,136,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  joystickKnob: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#888',
+    position: 'absolute',
+    left: 20,
+    top: 20,
+  },
+  gmapsBlueDotOuter: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'white',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.08)',
+    shadowColor: '#1976d2',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  gmapsBlueDotInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#1976d2',
+    borderWidth: 1.5,
+    borderColor: 'white',
   },
 });
