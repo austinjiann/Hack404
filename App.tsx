@@ -120,7 +120,7 @@ export default function App() {
     return Math.round(100 * Math.log(r / minRadius) / Math.log(maxRadius / minRadius));
   };
 
-  if (loading || !location || !dangerZone) {
+  if (loading) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}> 
         <ActivityIndicator size="large" color="#d32f2f" />
@@ -144,30 +144,39 @@ export default function App() {
     <View style={styles.container}>
       <MapView
         style={styles.map}
-        initialRegion={{
+        initialRegion={location ? {
           latitude: location.latitude,
           longitude: location.longitude,
           latitudeDelta: 0.01,
           longitudeDelta: 0.01,
+        } : {
+          latitude: 37.78825, // Default to San Francisco
+          longitude: -122.4324,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
         }}
         showsUserLocation={true}
         // No need for onRegionChangeComplete fetch, real-time updates handle this
       >
          {/* User's marker for new report (green) */}
-         <Marker
-           coordinate={dangerZone}
-           pinColor="green"
-           draggable
-           onDragEnd={handleMarkerDrag}
-           hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
-           tracksViewChanges={false}
-         />
-         <Circle
-           center={dangerZone}
-           radius={radius}
-           strokeColor="#2ecc40"
-           fillColor="rgba(46,204,64,0.2)"
-         />
+         {dangerZone && (
+           <Marker
+             coordinate={dangerZone}
+             pinColor="green"
+             draggable
+             onDragEnd={handleMarkerDrag}
+             hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
+             tracksViewChanges={false}
+           />
+         )}
+         {dangerZone && (
+           <Circle
+             center={dangerZone}
+             radius={radius}
+             strokeColor="#2ecc40"
+             fillColor="rgba(46,204,64,0.2)"
+           />
+         )}
          {/* Show all reported danger zones from Firestore */}
          {dangerZones.map(z => {
            // Compute age in ms
