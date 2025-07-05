@@ -4,7 +4,7 @@ import DescriptionModal from './DescriptionModal';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
-import { collection, addDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, Timestamp, onSnapshot } from 'firebase/firestore';
 import { firestore } from './firebase';
 
 export default function App() {
@@ -32,24 +32,22 @@ export default function App() {
     };
   };
 
-  // Fetch danger zones in view (simple bounding box)
-  const fetchDangerZones = async (center: { latitude: number; longitude: number }) => {
-    // For simplicity, fetch all and filter client-side (Firestore doesn't support geo-queries natively)
-    try {
-      const snapshot = await getDocs(collection(firestore, 'danger_zones'));
+  // Real-time Firestore listener for all danger zones
+  useEffect(() => {
+    if (!location) return;
+    const delta = 0.02;
+    const { minLat, maxLat, minLng, maxLng } = getBoundingBox(location, delta);
+    const unsub = onSnapshot(collection(firestore, 'danger_zones'), (snapshot) => {
       const allZones = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       // Filter to those within ~0.02 deg (~2km) of center
-      const delta = 0.02;
-      const { minLat, maxLat, minLng, maxLng } = getBoundingBox(center, delta);
       const filtered = allZones.filter((z: any) =>
         z.latitude >= minLat && z.latitude <= maxLat &&
         z.longitude >= minLng && z.longitude <= maxLng
       );
       setDangerZones(filtered);
-    } catch (err) {
-      console.error('Error fetching danger zones:', err);
-    }
-  };
+    });
+    return () => unsub();
+  }, [location]);
 
   useEffect(() => {
     (async () => {
@@ -71,11 +69,6 @@ export default function App() {
       setLoading(false);
     })();
   }, []);
-
-  // Fetch danger zones when map loads or location changes
-  useEffect(() => {
-    if (location) fetchDangerZones(location);
-  }, [location]);
 
   const handleReport = async () => {
     if (!dangerZone) return;
@@ -99,8 +92,6 @@ export default function App() {
       });
       setSliderValue(10);
       setRadius(minRadius);
-      // Refresh danger zones
-      fetchDangerZones(location!);
     } catch (err) {
       Alert.alert('Error reporting danger zone', String(err));
     } finally {
@@ -152,10 +143,7 @@ export default function App() {
           longitudeDelta: 0.01,
         }}
         showsUserLocation={true}
-        onRegionChangeComplete={(reg) => {
-          // Optionally fetch new zones for new region center
-          fetchDangerZones({ latitude: reg.latitude, longitude: reg.longitude });
-        }}
+        // No need for onRegionChangeComplete fetch, real-time updates handle this
       >
         {/* User's marker for new report */}
         <Marker
