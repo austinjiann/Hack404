@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import Markdown from 'react-native-markdown-display';
 import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated, Platform, Modal, Image } from 'react-native';
 import DescriptionModal from './DescriptionModal';
 import CameraButton from './CameraButton';
@@ -12,6 +13,7 @@ import { realtimeDb } from './firebaseRealtime';
 import type { DangerZone } from './types';
 import { storage } from './firebaseStorage';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { gemini } from './gemini';
 
 export default function App() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -34,6 +36,9 @@ export default function App() {
   const [descDraft, setDescDraft] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [dangerZones, setDangerZones] = useState<any[]>([]); // All fetched danger zones
+  const [nearbyDescriptions, setNearbyDescriptions] = useState<string[]>([]); // Descriptions within 400m
+  const [summaryModalVisible, setSummaryModalVisible] = useState(false);
+  const [geminiSummary, setGeminiSummary] = useState<string>('');
 
   const [joystickActive, setJoystickActive] = useState(false);
   const joystickRadius = 40; // px
@@ -390,7 +395,7 @@ const lastNotificationTime = React.useRef<number>(0);
         }}
         style={{
           position: 'absolute',
-          bottom: 100,
+          bottom: 120,
           left: 24,
           zIndex: 10,
           shadowColor: '#000',
@@ -551,6 +556,73 @@ const lastNotificationTime = React.useRef<number>(0);
 
       {/* Bottom Action Bar */}
       <View style={styles.bottomActionBar}>
+        {/* Fetch Descriptions Button */}
+      {/* Summary Description (vertical stack, lower right, above Report button) */}
+      <View style={{ position: 'absolute', right: 20, bottom: 90, zIndex: 21, alignItems: 'flex-end', width: 160 }} pointerEvents="box-none">
+        <Pressable
+          style={({ pressed }) => [
+            { backgroundColor: '#ede7f6', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 28, borderColor: '#673ab7', borderWidth: 2, minHeight: 48, minWidth: 140, alignItems: 'center', justifyContent: 'center', shadowColor: '#673ab7', shadowOpacity: 0.07, shadowRadius: 10, elevation: 2 },
+            pressed && { opacity: 0.9 }
+          ]}
+          onPress={async () => {
+            if (!location) return;
+            // Get all danger zones within 400m
+            const zones = dangerZones.filter(z => {
+              return getDistanceMeters(z.latitude, z.longitude, location.latitude, location.longitude) <= 400;
+            });
+            // Gather descriptions, images, and timestamps
+            const descriptions = zones.map(z => z.description ?? '');
+            const images = zones.map(z => z.photoUrl ?? '');
+            const timestamps = zones.map(z => z.timestamp ?? null);
+            setNearbyDescriptions(zones.map(z => [z.description, z.timestamp, z.photoUrl]));
+
+            // Compose the Gemini prompt
+            const prompt = `Based on the provided list of descriptions and images of danger zones in the area 100m around you, summarize all of them into one condensed short description of what is happening. If the entire list is filled with empty strings but is not completely empty, (just the empty strings), still warn of a potential danger nearby. But, if it is just an empty list, don't warn of any danger and say no danger zones reported recently. Finally, conclude how high the risk is based on timestamp (how long ago it was) and how many danger zones there are. You can include if most of the danger zones are old or if they are recent to explain why the risk level is high or low. 
+            
+            The description should consist of 2 separate sections: 1) A short description of what is happening along with a couple of examples of danger zones, and 2) A conclusion on the risk level. The format for this should always be the same. Have the headings of "Description" and "Risk Level" in bold. Use space between each section. Use markdown to format. Don't use numbers to enumerate sections. Don't have an overall title for the summary. 
+            
+            Do NOT include any additional information on timestamps or specific values or calculations you used to determine your findings. Keep the summary concise and to the point. \n\nDescriptions: ${JSON.stringify(descriptions)}\nImages: ${JSON.stringify(images)}\nTimestamps: ${JSON.stringify(timestamps)}\nCurrent time (ms since epoch): ${Date.now()}`;
+
+            try {
+              setGeminiSummary('Loading summary...');
+              setSummaryModalVisible(true);
+              const response = await gemini.models.generateContent({
+                model: 'gemini-2.0-flash-001',
+                contents: prompt,
+              });
+              const summary = response.text || JSON.stringify(response);
+              setGeminiSummary(summary);
+            } catch (err) {
+              setGeminiSummary('Gemini API Error: ' + String(err));
+            }
+          }}
+        >
+          <Text style={{ color: '#673ab7', fontWeight: 'bold', fontSize: 16, marginBottom: 2 }}>Zone Summary</Text>
+        </Pressable>
+      </View>
+
+      {/* Gemini Summary Modal */}
+      <Modal
+        visible={summaryModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setSummaryModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 18, padding: 28, maxWidth: 420, width: '90%', maxHeight: '80%', alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={{ fontWeight: 'bold', fontSize: 20, color: '#673ab7', marginBottom: 16, alignSelf: 'center' }}>Gemini Danger Zone Summary</Text>
+            <View style={{ width: '100%', backgroundColor: 'white', borderRadius: 12, padding: 16, marginBottom: 20 }}>
+              <Markdown style={{ body: { fontSize: 16, color: '#333', textAlign: 'left' } }}>{geminiSummary}</Markdown>
+            </View>
+            <Pressable style={{ alignSelf: 'center', backgroundColor: '#673ab7', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 32, marginTop: 6 }} onPress={() => setSummaryModalVisible(false)}>
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16 }}>Close</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Bottom Action Bar */}
+      <View style={[styles.bottomActionBar, { marginBottom: -23 }]}> {/* Keep Describe/Report at the very bottom */}
         <Pressable 
           style={({pressed}) => [
             styles.actionButton,
@@ -578,9 +650,10 @@ const lastNotificationTime = React.useRef<number>(0);
           <Text style={[styles.actionButtonText, styles.reportButtonText]}>Report Zone</Text>
         </Pressable>
       </View>
+      </View>
 
       {/* Joystick */}
-      <View style={styles.joystickContainer} pointerEvents="box-none">
+      <View style={[styles.joystickContainer, { marginBottom: 5 }]} pointerEvents="box-none">
         <View style={styles.joystickBase}>
           <Animated.View
             style={[
@@ -649,7 +722,7 @@ const styles = StyleSheet.create({
     right: 20,
     backgroundColor: 'white',
     borderRadius: 16,
-    padding: 16,
+    padding: 14,
     width: 240,
     ...Platform.select({
       ios: {
@@ -667,13 +740,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#666',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   radiusValue: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#2196F3',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   slider: {
     width: '100%',
