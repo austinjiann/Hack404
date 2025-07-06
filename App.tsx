@@ -25,8 +25,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [dangerZone, setDangerZone] = useState<{ latitude: number; longitude: number } | null>(null);
   // Slider goes from 0 to 100, mapped exponentially to radius 10m-400m
-  const [sliderValue, setSliderValue] = useState(10);
-  const minRadius = 10;
+  const [sliderValue, setSliderValue] = useState(0);
+  const minRadius = 50;
   const maxRadius = 800;
   const [radius, setRadius] = useState(minRadius);
   const [descModalVisible, setDescModalVisible] = useState(false);
@@ -232,7 +232,7 @@ const lastNotificationTime = React.useRef<number>(0);
         latitude: location!.latitude + (Math.random() - 0.5) * 0.002,
         longitude: location!.longitude + (Math.random() - 0.5) * 0.002,
       });
-      setSliderValue(10);
+      setSliderValue(50);
       setRadius(minRadius);
     } catch (err) {
       Alert.alert('Error reporting danger zone', String(err));
@@ -362,11 +362,13 @@ const lastNotificationTime = React.useRef<number>(0);
       {/* Camera Button - bottom left, floating */}
       {/* Preview thumbnail if image selected */}
       {selectedImage && (
-        <View style={{ position: 'absolute', bottom: 170, left: 24, zIndex: 11, borderRadius: 8, overflow: 'hidden', borderWidth: 2, borderColor: '#2196F3', backgroundColor: 'white' }}>
-          <Pressable onPress={() => setSelectedImage(null)}>
-            <Text style={{ position: 'absolute', top: 2, right: 6, zIndex: 12, color: '#2196F3', fontWeight: 'bold', fontSize: 18 }}>×</Text>
+        <View style={{ position: 'absolute', bottom: 170, left: 24, zIndex: 11 }}>
+          <View style={{ width: 56, height: 56, borderRadius: 8, overflow: 'hidden', borderWidth: 2, borderColor: '#2196F3', backgroundColor: 'white' }}>
             <Image source={{ uri: selectedImage }} style={{ width: 56, height: 56, borderRadius: 8 }} />
-          </Pressable>
+            <Pressable onPress={() => setSelectedImage(null)} style={{ position: 'absolute', top: 0, right: 0, zIndex: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }} hitSlop={8}>
+              <Text style={{ color: '#2196F3', fontWeight: 'bold', fontSize: 18, backgroundColor: 'white', borderRadius: 12, width: 24, height: 24, textAlign: 'center', lineHeight: 22 }}>×</Text>
+            </Pressable>
+          </View>
         </View>
       )}
       <CameraButton
@@ -433,39 +435,22 @@ const lastNotificationTime = React.useRef<number>(0);
             </View>
           </Marker>
         )}
-         {/* User's marker for new report (green) */}
-         {dangerZone && (
-           <Marker
-             coordinate={dangerZone}
-             pinColor="green"
-             draggable
-             onDragEnd={handleMarkerDrag}
-             hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
-             tracksViewChanges={false}
-           />
-         )}
-         {dangerZone && (
-           <Circle
-             center={dangerZone}
-             radius={radius}
-             strokeColor="#2ecc40"
-             fillColor="rgba(46,204,64,0.2)"
-           />
-         )}
-         {filteredDangerZones.map(z => {
+          {/* Render all red markers/circles first */}
+          {filteredDangerZones.filter(z => {
+            if (!dangerZone) return true;
+            const dist = getDistanceMeters(z.latitude, z.longitude, dangerZone.latitude, dangerZone.longitude);
+            return dist > 10;
+          }).map(z => {
             // Compute age in ms
             const now = Date.now();
             const ts = typeof z.timestamp === 'number' ? z.timestamp : 0;
             const ageMs = now - ts;
             const maxAgeMs = 12 * 60 * 60 * 1000; // 12 hours
-            if (ageMs > maxAgeMs) return null; // Hide if older than 12 hours
-
-            // Compute color: red (0) -> orange (6h) -> yellow (12h)
-            // 0h: #d32f2f (red), 6h: #ffa500 (orange), 12h: #fff200 (yellow)
+            if (ageMs > maxAgeMs) return null;
             const colorStops = [
-              { t: 0, color: [211, 47, 47] },        // red
-              { t: 0.5, color: [255, 165, 0] },      // orange
-              { t: 1, color: [255, 242, 0] },        // yellow
+              { t: 0, color: [211, 47, 47] },
+              { t: 0.5, color: [255, 165, 0] },
+              { t: 1, color: [255, 242, 0] },
             ];
             const t = Math.min(1, Math.max(0, ageMs / maxAgeMs));
             let color = [211, 47, 47];
@@ -480,26 +465,46 @@ const lastNotificationTime = React.useRef<number>(0);
             const rgb = `rgb(${color[0]},${color[1]},${color[2]})`;
             const rgba = `rgba(${color[0]},${color[1]},${color[2]},0.2)`;
             return (
-              <React.Fragment key={z.id}>
+              <React.Fragment key={z.id || `${z.latitude},${z.longitude},${z.timestamp}`}>
                 <Marker
-                  key={`marker-${z.id}-${markerRefresh}`}
                   coordinate={{ latitude: z.latitude, longitude: z.longitude }}
                   pinColor={rgb}
                   onPress={() => {
                     setSelectedMarkerDescription(z.description || 'No description provided.');
                     setShowMarkerModal(true);
                   }}
+                  zIndex={1}
                 />
                 <Circle
-                  key={`circle-${z.id}-${markerRefresh}`}
                   center={{ latitude: z.latitude, longitude: z.longitude }}
                   radius={z.radius || 40}
                   strokeColor={rgb}
                   fillColor={rgba}
+                  zIndex={1}
                 />
               </React.Fragment>
             );
           })}
+          {dangerZone && (
+            <React.Fragment>
+              <Marker
+                coordinate={dangerZone}
+                pinColor="green"
+                draggable
+                onDragEnd={handleMarkerDrag}
+                hitSlop={{ top: 80, bottom: 80, left: 80, right: 80 }}
+                tracksViewChanges={false}
+                zIndex={1001}
+              />
+              <Circle
+                center={dangerZone}
+                radius={radius}
+                strokeColor="#2ecc40"
+                fillColor="rgba(46,204,64,0.2)"
+                zIndex={1000}
+              />
+            </React.Fragment>
+          )}
       </MapView>
 
       {/* Danger Zone Description Modal */}
