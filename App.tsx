@@ -33,6 +33,20 @@ import {
 import { getSafeWalkingRoute } from "./osrm";
 import { getOfflineSafeRoute } from "./offlineRouter";
 import { gemini } from "./gemini";
+import { LogBox } from "react-native";
+
+// Suppress all yellow box/log notifications and overlays
+LogBox.ignoreAllLogs(true);
+
+// Suppress all red box (fatal) error overlays in Expo
+
+if (typeof ErrorUtils !== 'undefined' && ErrorUtils.setGlobalHandler) {
+  ErrorUtils.setGlobalHandler((error, isFatal) => {
+    // Optionally log error somewhere, or just ignore
+    // console.log('Suppressed error:', error);
+    // Do nothing to suppress red box
+  });
+}
 
 export default function App() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
