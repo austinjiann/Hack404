@@ -1,14 +1,14 @@
 {
   "expo": {
-    "name": "hack404",
-    "slug": "hack404",
+    "name": "Proteful",
+    "slug": "proteful",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon2.png",
+    "icon": "./assets/proteful.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/proteful.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },

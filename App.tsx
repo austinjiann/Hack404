@@ -58,6 +58,10 @@ export default function App() {
   const [destination, setDestination] = useState<{ latitude: number; longitude: number } | null>(null);
   const [safePath, setSafePath] = useState<{ latitude: number; longitude: number }[] | null>(null);
   const [isCalculatingPath, setIsCalculatingPath] = useState(false);
+  // Workaround: force refresh after path is found
+  const [refreshKey, setRefreshKey] = useState(0);
+  // New: Track if user is in destination-setting mode
+  const [isSettingDestination, setIsSettingDestination] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
   const pathCalculationTimeout = useRef<NodeJS.Timeout | null>(null);
 
@@ -350,27 +354,45 @@ const lastNotificationTime = React.useRef<number>(0);
 
   // Handle map press for routing
   const handleMapPress = async (e: any) => {
+    // Only allow setting destination if in destination-setting mode
+    if (!isSettingDestination) return;
+    setIsSettingDestination(false); // Exit destination mode after one use
     const tapped = e.nativeEvent.coordinate;
     setDestination(tapped);
     setSafePath(null);
     if (!location) return;
+
+    // Cancel routing if either the destination or the starting point are within a danger zone
+    const isInDangerZone = (point: { latitude: number; longitude: number }) => {
+      return dangerZones.some(z => {
+        const dist = getDistanceMeters(point.latitude, point.longitude, z.latitude, z.longitude);
+        const r = z.radius || 40;
+        return dist <= r;
+      });
+    };
+    if (isInDangerZone(location) || isInDangerZone(tapped)) {
+      Alert.alert('Danger Zone', 'Cannot route: Start or destination is inside a danger zone.');
+      setIsCalculatingPath(false);
+      setPathError('Start or destination is inside a danger zone.');
+      return;
+    }
 
     setIsCalculatingPath(true);
     setPathError(null);
 
     try {
       // Prepare zones array once
-    const zonesArr = dangerZones.map(z => ({
-      latitude: z.latitude,
-      longitude: z.longitude,
-      radius: z.radius || 40,
-    }));
+      const zonesArr = dangerZones.map(z => ({
+        latitude: z.latitude,
+        longitude: z.longitude,
+        radius: z.radius || 40,
+      }));
 
-    // Try offline router first for instant local path
-    let route: { latitude: number; longitude: number }[] | null = null;
-    try {
-      route = getOfflineSafeRoute(location, tapped, zonesArr);
-    } catch {
+      // Try offline router first for instant local path
+      let route: { latitude: number; longitude: number }[] | null = null;
+      try {
+        route = getOfflineSafeRoute(location, tapped, zonesArr);
+      } catch {
       // graph missing or corrupt
     }
 
@@ -389,6 +411,7 @@ const lastNotificationTime = React.useRef<number>(0);
     }
 
     setSafePath(route);
+    setRefreshKey(k => k + 1); // Force refresh workaround
     } catch (error) {
       console.error('Path calculation error:', error);
       setPathError('Network error - please try again');
@@ -438,7 +461,7 @@ const lastNotificationTime = React.useRef<number>(0);
   };
 
   return (
-    <View style={styles.container}>
+    <View key={refreshKey} style={styles.container}>
       {/* Camera Button - bottom left, floating */}
       {/* Preview thumbnail if image selected */}
       {selectedImage && (
@@ -590,7 +613,7 @@ const lastNotificationTime = React.useRef<number>(0);
           {destination && (
             <Marker
               coordinate={destination}
-              pinColor="red"
+              pinColor="#9C27B0" // purple
               title="Destination"
               draggable
               onDragEnd={handleMarkerDragEnd}
@@ -773,8 +796,8 @@ const lastNotificationTime = React.useRef<number>(0);
       />
 
       {/* Route control panel */}
-      {destination && (
-        <View style={styles.routePanel}>
+      {destination ? (
+        <View style={[styles.routePanel, { marginBottom: 140 }]}>
           <View style={styles.routeInfo}>
             <Text style={styles.routeTitle}>
               {isCalculatingPath ? '🔄 Calculating Route...' :
@@ -796,15 +819,22 @@ const lastNotificationTime = React.useRef<number>(0);
             <Text style={styles.clearRouteButtonText}>Clear</Text>
           </Pressable>
         </View>
-      )}
-
-      {/* Loading overlay */}
-      {isCalculatingPath && (
-        <View style={styles.loadingOverlay}>
-          <View style={styles.loadingCard}>
-            <ActivityIndicator size="large" color="#2196F3" />
-            <Text style={styles.loadingText}>Finding safe route...</Text>
+      ) : (
+        <View style={[styles.routePanel, { marginBottom: 140 }]}>
+          <View style={styles.routeInfo}>
+            <Text style={styles.routeTitle}>
+              {isSettingDestination ? 'Tap the map to select your destination' : 'Ready to set a destination?'}
+            </Text>
+            <Text style={styles.routeSubtitle}>
+              {isSettingDestination ? 'Tap anywhere on the map to choose where you want to go.' : 'Press the button below to begin.'}
+            </Text>
           </View>
+          <Pressable
+            style={[styles.clearRouteButton, isSettingDestination && { backgroundColor: '#1976d2' }]}
+            onPress={() => setIsSettingDestination(v => !v)}
+          >
+            <Text style={[styles.clearRouteButtonText, isSettingDestination && { color: 'white' }]}>Set Destination</Text>
+          </Pressable>
         </View>
       )}
     </View>
