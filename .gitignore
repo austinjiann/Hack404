@@ -37,3 +37,6 @@ yarn-error.*
 *.tsbuildinfo
 
 firebaseConfig.ts
+
+.env
+geminiConfig.ts
