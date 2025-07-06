@@ -4,5 +4,6 @@ export interface DangerZone {
   longitude: number;
   radius: number;
   description?: string;
-  timestamp: number; // ms since epoch
+  timestamp?: number;
+  photoUrl?: string;
 }
