@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated, Platform, Modal } from 'react-native';
+import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated, Platform, Modal, Image } from 'react-native';
 import DescriptionModal from './DescriptionModal';
+import CameraButton from './CameraButton';
+import * as ImagePicker from 'expo-image-picker';
 import MapView, { Marker, Circle, Region } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
@@ -8,8 +10,13 @@ import { ref, push, onValue, set } from 'firebase/database';
 import * as Notifications from 'expo-notifications';
 import { realtimeDb } from './firebaseRealtime';
 import type { DangerZone } from './types';
+import { storage } from './firebaseStorage';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 export default function App() {
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null); // For modal display
+
   const [showMarkerModal, setShowMarkerModal] = useState(false);
   const [selectedMarkerDescription, setSelectedMarkerDescription] = useState<string>('');
   const [location, setLocation] = useState<null | { latitude: number; longitude: number }>(null);
@@ -195,7 +202,17 @@ const lastNotificationTime = React.useRef<number>(0);
   const handleReport = async () => {
     if (!dangerZone) return;
     setSubmitting(true);
+    let photoUrl = null;
     try {
+      // Upload image if selected
+      if (selectedImage) {
+        const response = await fetch(selectedImage);
+        const blob = await response.blob();
+        const fileName = `dangerzone_${Date.now()}.jpg`;
+        const imgRef = storageRef(storage, `dangerzone_photos/${fileName}`);
+        await uploadBytes(imgRef, blob);
+        photoUrl = await getDownloadURL(imgRef);
+      }
       const dbRef = ref(realtimeDb, 'danger_zones');
       await push(dbRef, {
         latitude: dangerZone.latitude,
@@ -203,11 +220,13 @@ const lastNotificationTime = React.useRef<number>(0);
         radius,
         description,
         timestamp: Date.now(),
+        photoUrl,
       });
       Alert.alert('Danger zone reported!' + (description ? `\nDescription: ${description}` : ''));
       // Reset state for new report
       setDescription('');
       setDescDraft('');
+      setSelectedImage(null);
       // Move marker to a new position (e.g., offset slightly)
       setDangerZone({
         latitude: location!.latitude + (Math.random() - 0.5) * 0.002,
@@ -221,6 +240,7 @@ const lastNotificationTime = React.useRef<number>(0);
       setSubmitting(false);
     }
   };
+
 
 
   const handleDescriptionSubmit = (desc: string) => {
@@ -339,6 +359,45 @@ const lastNotificationTime = React.useRef<number>(0);
 
   return (
     <View style={styles.container}>
+      {/* Camera Button - bottom left, floating */}
+      {/* Preview thumbnail if image selected */}
+      {selectedImage && (
+        <View style={{ position: 'absolute', bottom: 170, left: 24, zIndex: 11, borderRadius: 8, overflow: 'hidden', borderWidth: 2, borderColor: '#2196F3', backgroundColor: 'white' }}>
+          <Pressable onPress={() => setSelectedImage(null)}>
+            <Text style={{ position: 'absolute', top: 2, right: 6, zIndex: 12, color: '#2196F3', fontWeight: 'bold', fontSize: 18 }}>×</Text>
+            <Image source={{ uri: selectedImage }} style={{ width: 56, height: 56, borderRadius: 8 }} />
+          </Pressable>
+        </View>
+      )}
+      <CameraButton
+        onPress={async () => {
+          // Ask for permissions
+          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+          if (status !== 'granted') {
+            Alert.alert('Camera permission is required!');
+            return;
+          }
+          const result = await ImagePicker.launchCameraAsync({
+            allowsEditing: true,
+            quality: 0.7,
+            base64: false,
+          });
+          if (!result.canceled && result.assets && result.assets.length > 0) {
+            setSelectedImage(result.assets[0].uri);
+          }
+        }}
+        style={{
+          position: 'absolute',
+          bottom: 100,
+          left: 24,
+          zIndex: 10,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.3,
+          shadowRadius: 4,
+          elevation: 6,
+        }}
+      />
       {/* Reset Position Button */}
       <View style={styles.resetButtonContainer}>
         <Pressable style={styles.resetButton} onPress={handleResetPosition}>
@@ -454,6 +513,14 @@ const lastNotificationTime = React.useRef<number>(0);
           <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 24, maxWidth: 320, alignItems: 'center' }}>
             <Text style={{ fontWeight: 'bold', fontSize: 18, marginBottom: 12 }}>Danger Zone Description</Text>
             <Text style={{ fontSize: 16, color: '#444', marginBottom: 20, textAlign: 'center' }}>{selectedMarkerDescription}</Text>
+            {/* Show image if present in modal */}
+            {filteredDangerZones.find(z => z.description === selectedMarkerDescription && z.photoUrl) && (
+              <Image
+                source={{ uri: filteredDangerZones.find(z => z.description === selectedMarkerDescription)?.photoUrl }}
+                style={{ width: 180, height: 180, borderRadius: 16, marginBottom: 16, marginTop: 8, borderWidth: 2, borderColor: '#2196F3' }}
+                resizeMode="cover"
+              />
+            )}
             <Pressable onPress={() => setShowMarkerModal(false)} style={{ paddingVertical: 8, paddingHorizontal: 20, backgroundColor: '#2196F3', borderRadius: 8 }}>
               <Text style={{ color: 'white', fontWeight: 'bold' }}>Close</Text>
             </Pressable>

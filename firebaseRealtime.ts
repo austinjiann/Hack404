@@ -10,4 +10,5 @@ if (getApps().length === 0) {
   app = getApps()[0];
 }
 
+export { app };
 export const realtimeDb = getDatabase(app);
