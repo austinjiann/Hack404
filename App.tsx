@@ -1,10 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import Markdown from 'react-native-markdown-display';
 import { StyleSheet, View, Dimensions, Text, Pressable, Alert, ActivityIndicator, PanResponder, Animated, Platform, Modal, Image } from 'react-native';
 import DescriptionModal from './DescriptionModal';
 import CameraButton from './CameraButton';
 import * as ImagePicker from 'expo-image-picker';
-import MapView, { Marker, Circle, Region } from 'react-native-maps';
+import MapView, { Marker, Circle, Region, Polyline } from 'react-native-maps';
 import Slider from '@react-native-community/slider';
 import * as Location from 'expo-location';
 import { ref, push, onValue, set } from 'firebase/database';
@@ -13,6 +13,8 @@ import { realtimeDb } from './firebaseRealtime';
 import type { DangerZone } from './types';
 import { storage } from './firebaseStorage';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getSafeWalkingRoute } from './osrm';
+import { getOfflineSafeRoute } from './offlineRouter';
 import { gemini } from './gemini';
 
 export default function App() {
@@ -52,6 +54,12 @@ export default function App() {
 
   // Store the initial GPS location for reset
   const initialLocationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+
+  const [destination, setDestination] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [safePath, setSafePath] = useState<{ latitude: number; longitude: number }[] | null>(null);
+  const [isCalculatingPath, setIsCalculatingPath] = useState(false);
+  const [pathError, setPathError] = useState<string | null>(null);
+  const pathCalculationTimeout = useRef<NodeJS.Timeout | null>(null);
 
 // --- Notification/intersection helpers ---
 function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -340,6 +348,73 @@ const lastNotificationTime = React.useRef<number>(0);
     }
   };
 
+  // Handle map press for routing
+  const handleMapPress = async (e: any) => {
+    const tapped = e.nativeEvent.coordinate;
+    setDestination(tapped);
+    setSafePath(null);
+    if (!location) return;
+
+    setIsCalculatingPath(true);
+    setPathError(null);
+
+    try {
+      // Prepare zones array once
+    const zonesArr = dangerZones.map(z => ({
+      latitude: z.latitude,
+      longitude: z.longitude,
+      radius: z.radius || 40,
+    }));
+
+    // Try offline router first for instant local path
+    let route: { latitude: number; longitude: number }[] | null = null;
+    try {
+      route = getOfflineSafeRoute(location, tapped, zonesArr);
+    } catch {
+      // graph missing or corrupt
+    }
+
+    if (!route) {
+      route = await getSafeWalkingRoute(location, tapped, zonesArr);
+    }
+
+    if (!route) {
+      setPathError('No route found');
+      setSafePath(null);
+      Alert.alert(
+        'Route Finding',
+        'Could not find a walking route to your destination. The location might not be accessible by foot.'
+      );
+      return;
+    }
+
+    setSafePath(route);
+    } catch (error) {
+      console.error('Path calculation error:', error);
+      setPathError('Network error - please try again');
+      setSafePath(null);
+      Alert.alert(
+        'Connection Error',
+        'Failed to calculate route. Please check your internet connection and try again.'
+      );
+    } finally {
+      setIsCalculatingPath(false);
+    }
+  };
+
+  // Handle destination marker drag
+  const handleMarkerDragEnd = (e: any) => {
+    setDestination(e.nativeEvent.coordinate);
+    setSafePath(null); // Clear existing path
+  };
+
+  // Clear route handler
+  const clearRoute = () => {
+    setDestination(null);
+    setSafePath(null);
+    setPathError(null);
+  };
+
   if (loading) {
     return (
       <View style={[styles.container, styles.loadingContainer]}> 
@@ -431,6 +506,7 @@ const lastNotificationTime = React.useRef<number>(0);
         pitchEnabled={!joystickActive}
         rotateEnabled={!joystickActive}
         zoomEnabled={!joystickActive}
+        onPress={handleMapPress}
       >
          {/* Custom blue dot marker for user location */}
          {location && (
@@ -509,6 +585,25 @@ const lastNotificationTime = React.useRef<number>(0);
                 zIndex={1000}
               />
             </React.Fragment>
+          )}
+          {/* Draggable destination marker */}
+          {destination && (
+            <Marker
+              coordinate={destination}
+              pinColor="red"
+              title="Destination"
+              draggable
+              onDragEnd={handleMarkerDragEnd}
+            />
+          )}
+          {/* Safe path visualization */}
+          {safePath && (
+            <Polyline
+              coordinates={safePath}
+              strokeColor="#2196F3"
+              strokeWidth={3}
+              lineDashPattern={[5, 5]}
+            />
           )}
       </MapView>
 
@@ -676,6 +771,42 @@ const lastNotificationTime = React.useRef<number>(0);
         onSubmit={(desc) => { setDescription(desc); setDescModalVisible(false); }}
         initialValue={descDraft}
       />
+
+      {/* Route control panel */}
+      {destination && (
+        <View style={styles.routePanel}>
+          <View style={styles.routeInfo}>
+            <Text style={styles.routeTitle}>
+              {isCalculatingPath ? '🔄 Calculating Route...' :
+               pathError ? '⚠️ ' + pathError :
+               safePath ? '🚶‍♂️ Safe Route Found' :
+               '📍 Select Destination'}
+            </Text>
+            <Text style={styles.routeSubtitle}>
+              {isCalculatingPath ? 'Finding the safest path...' : 
+               pathError ? 'Try a different destination' : 
+               safePath ? 'Following roads and avoiding dangers' :
+               'Tap map or drag marker'}
+            </Text>
+          </View>
+          <Pressable
+            style={styles.clearRouteButton}
+            onPress={clearRoute}
+          >
+            <Text style={styles.clearRouteButtonText}>Clear</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* Loading overlay */}
+      {isCalculatingPath && (
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingCard}>
+            <ActivityIndicator size="large" color="#2196F3" />
+            <Text style={styles.loadingText}>Finding safe route...</Text>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -905,5 +1036,62 @@ const styles = StyleSheet.create({
     color: '#1976d2',
     fontWeight: 'bold',
     fontSize: 13,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  routePanel: {
+    position: 'absolute',
+    bottom: 100,
+    left: 20,
+    right: 20,
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 3.84,
+      },
+      android: {
+        elevation: 5,
+      },
+    }),
+  },
+  routeInfo: {
+    flex: 1,
+    marginRight: 16,
+  },
+  routeTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  routeSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
+  },
+  clearRouteButton: {
+    backgroundColor: '#ff5252',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  clearRouteButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
   },
 });
